@@ -96,8 +96,10 @@ class IgdbToWc {
   public function processForTesting(){
     echo "<pre>";
     echo "Testing Enabled";
-    $this->itwGetProductsFromWooCommerce();
-		die;
+    //$this->itwGetProductsFromWooCommerce();
+	//$this->itwGetProductsFromIGDB();
+	$this->itwUpdateWcProducts();
+	die;
   }
 
   public function itwGetProductsFromWooCommerce(){
@@ -129,6 +131,37 @@ class IgdbToWc {
     wp_reset_query();
 
   }
+  
+  public function itwGetProductsFromIGDB(){
+	$getTitles = $this->itwGetProductsFromWcTable(0);
+	foreach($getTitles as $key => $title){
+	  $this->call_IGDB_API($key, $title);
+	}	  
+  }
+  
+  public function itwUpdateWcProducts(){
+	$getTitles = $this->itwGetProductsFromWcTable(1);
+	foreach($getTitles as $key => $gameObj){
+	  $this->itwUpdateProductToWc($key,json_decode($gameObj));
+	}
+	die;
+  }
+  
+  public function itwUpdateProductToWc($id,$gameObj){
+	$my_post = array(
+		'ID'           => $id,
+		'post_content' => $gameObj[0]->summary,
+	);
+
+	// Update the post into the database
+	wp_update_post( $my_post );
+	
+	$table = 'itw_wc_posts';
+	$fieldA = array('is_processed' => 2, 'updated'=> date('Y-m-d H:i:s', time()));
+	$whereA = array('post_id'=> $id );
+	$this->updateTable($table,$fieldA,$whereA);
+
+  }
 
   public function sendToTable($table,$values){
     global $wpdb;
@@ -146,28 +179,28 @@ class IgdbToWc {
   }
 
   public function itwMainPage(){
-    //$this->processForTesting(); die;
-    $getTitles = $this->itwGetProductsFromTable();
-    foreach($getTitles as $key => $title){
-      $this->call_IGDB_API($key, $title);
-    }
+    $this->processForTesting();    
   }
 
-  public function itwGetProductsFromTable(){
+  public function itwGetProductsFromWcTable($is_processed){
     $table = 'itw_wc_posts';
     global $wpdb;
     $table = $wpdb->prefix.$table;
-    $sqlQuery = "SELECT post_id,post_title FROM $table WHERE id > 0 and is_processed = 0 ORDER BY id DESC limit 30";
-    $results = $wpdb->get_results( $sqlQuery, OBJECT_K );
-    $results = array_column($results, 'post_title','post_id');
+	if($is_processed == 0){
+		$sqlQuery = "SELECT post_id,post_title FROM $table WHERE id > 0 and is_processed = 0 ORDER BY id DESC limit 30";
+		$results = $wpdb->get_results( $sqlQuery, OBJECT_K );
+		$results = array_column($results, 'post_title','post_id');
+	}else if($is_processed == 1){
+		$sqlQuery = "SELECT post_id,object FROM $table WHERE id > 0 and is_processed = 1 ORDER BY id DESC limit 30";
+		$results = $wpdb->get_results( $sqlQuery, OBJECT_K );
+		$results = array_column($results, 'object','post_id');		
+	}
     return $results;
   }
 
-  public function updateTable($table,$field,$value,$where,$where_value){
+  public function updateTable($table,$fieldA,$whereA){
     global $wpdb;
     $table = $wpdb->prefix.$table;
-    $fieldA[$field] = $value;
-    $whereA[$where] = $where_value;
     $wpdb->update($table, $fieldA, $whereA);
   }
 
@@ -206,9 +239,9 @@ class IgdbToWc {
     }else{
       $table = 'itw_wc_posts';
       //$result = json_decode($result);
-      $this->updateTable($table,'object',$result,"post_id",$post_id);
-      $field = 'is_processed';
-      $this->updateTable($table,$field,1,'post_id',$post_id);
+	  $fieldA = array('object' => $result,'is_processed' => 1, 'updated'=> date('Y-m-d H:i:s', time()));
+	  $whereA = array('post_id'=> $post_id );
+      $this->updateTable($table,$fieldA,$whereA);
       $results =  "Search Key is Successfully saved";
     }
     curl_close($curl);
