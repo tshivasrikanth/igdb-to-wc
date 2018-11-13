@@ -11,8 +11,13 @@
 class IgdbToWc {
 
   public function __construct() {
+    add_action('wp_loaded', array($this,'igdbAddStyles'));
     add_action('admin_menu', array($this,'itwCreateAdminPages'));
     register_activation_hook(__FILE__, array($this, 'itwCreateDatabaseTable'));
+  }
+
+  public function igdbAddStyles() {
+    wp_register_style( 'igdbapirbbstyle', plugins_url('css/style.css',__FILE__ ));
   }
 
   public function itwCreateDatabaseTable() {
@@ -23,6 +28,7 @@ class IgdbToWc {
       '`post_id` bigint(20)',
       '`post_title` text',
       '`is_processed` tinyint(1)',
+      '`object` text',
       '`created` datetime',
       '`updated` datetime'
     );
@@ -54,8 +60,39 @@ class IgdbToWc {
     $function = array($this,'itwMainPage');
     add_menu_page( $page_title, $menu_title, $capability, $menu_slug, $function);
 
+    $st_page_title = 'IGDB Settings';
+    $st_menu_title = 'IGDB Settings';
+    $st_menu_slug = 'igdb_settings_rbb';
+    $st_function = array($this,'igdb_settings_page_display');
+    add_submenu_page( $parent_slug, $st_page_title, $st_menu_title, $capability, $st_menu_slug, $st_function);
+
   }
 
+  public function igdb_settings_page_display() {
+
+    wp_enqueue_style('igdbapirbbstyle');    
+    
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized user');
+    }
+  
+    if (!empty($_POST))
+    {
+        if (! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'IgdbNonce' ) )
+        {
+            print 'Sorry, your nonce did not verify.';
+            exit;
+        }
+    }
+  
+    if (isset($_POST['igdbapikey']) && strlen($_POST['igdbapikey']) ) {
+        $value = sanitize_text_field($_POST['igdbapikey']);
+        update_option('igdbapikey', $value);
+    }
+  
+    $value = get_option('igdbapikey');
+    include 'settings-file.php';
+  }
   public function processForTesting(){
     echo "<pre>";
     echo "Testing Enabled";
@@ -109,7 +146,73 @@ class IgdbToWc {
   }
 
   public function itwMainPage(){
-    $this->processForTesting();
+    //$this->processForTesting(); die;
+    $getTitles = $this->itwGetProductsFromTable();
+    foreach($getTitles as $key => $title){
+      $this->call_IGDB_API($key, $title);
+    }
+  }
+
+  public function itwGetProductsFromTable(){
+    $table = 'itw_wc_posts';
+    global $wpdb;
+    $table = $wpdb->prefix.$table;
+    $sqlQuery = "SELECT post_id,post_title FROM $table WHERE id > 0 and is_processed = 0 ORDER BY id DESC limit 30";
+    $results = $wpdb->get_results( $sqlQuery, OBJECT_K );
+    $results = array_column($results, 'post_title','post_id');
+    return $results;
+  }
+
+  public function updateTable($table,$field,$value,$where,$where_value){
+    global $wpdb;
+    $table = $wpdb->prefix.$table;
+    $fieldA[$field] = $value;
+    $whereA[$where] = $where_value;
+    $wpdb->update($table, $fieldA, $whereA);
+  }
+
+  public function call_IGDB_API($post_id, $title){
+
+    $options = array(
+      'fields'=> '*',
+      'search' => urlencode($title),
+      'limit' => 1,
+    );
+    
+    $url = 'https://api-endpoint.igdb.com/games/?';
+
+    $fields = array();
+    foreach($options as $key => $value){
+      $fields[] = $key.'='.$value;
+    }
+
+    $field_url = implode('&',$fields);
+    $curl = curl_init();
+
+    $url = $url . $field_url;
+
+    curl_setopt($curl, CURLOPT_URL, $url);
+    curl_setopt($curl, CURLOPT_HTTPHEADER, array(
+        'user-key: ' . get_option('igdbapikey'),
+        'Accept: application/json',
+    ));
+    curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+
+    // EXECUTE:
+    $result = curl_exec($curl);
+    if(!$result){
+      $results  = "<h3>Oops! The request was not successful. Make sure you are using a valid ";
+      $results .= "AppID for the Production environment.</h3>";
+    }else{
+      $table = 'itw_wc_posts';
+      //$result = json_decode($result);
+      $this->updateTable($table,'object',$result,"post_id",$post_id);
+      $field = 'is_processed';
+      $this->updateTable($table,$field,1,'post_id',$post_id);
+      $results =  "Search Key is Successfully saved";
+    }
+    curl_close($curl);
+    return $results;
   }
 
 }
