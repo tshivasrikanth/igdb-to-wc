@@ -14,7 +14,36 @@ class IgdbToWc {
     add_action('wp_loaded', array($this,'igdbAddStyles'));
     add_action('admin_menu', array($this,'itwCreateAdminPages'));
     register_activation_hook(__FILE__, array($this, 'itwCreateDatabaseTable'));
+	
+	add_filter('cron_schedules', array($this,'wcCronInterval'));
+	register_activation_hook(__FILE__, array($this,'wcCronActivation'));
+	add_action('wcCronRun', array($this,'wcCron'));
+	register_deactivation_hook(__FILE__, array($this,'wcCronDeactivate'));
   }
+  
+    public function wcCronDeactivate() {
+        wp_clear_scheduled_hook('wcCronRun');
+    }
+	
+	public function wcCronActivation(){
+		if (! wp_next_scheduled ( 'wcCronRun' )) {
+			wp_schedule_event(time(), 'FiteenMinutes', 'wcCronRun');
+		}
+	}
+
+	public function wcCronInterval( $schedules ) {
+		$schedules['FiteenMinutes'] = array(
+			'interval' => 900,
+			'display' => __( 'Every 15 Minutes' ),
+		);
+		return $schedules;
+	}
+	
+	public function wcCron(){
+		$this->itwGetProductsFromWooCommerce();
+		$this->itwGetProductsFromIGDB();
+		$this->itwUpdateWcProducts();		
+	}
 
   public function igdbAddStyles() {
     wp_register_style( 'igdbapirbbstyle', plugins_url('css/style.css',__FILE__ ));
@@ -94,12 +123,59 @@ class IgdbToWc {
     include 'settings-file.php';
   }
   public function processForTesting(){
-    echo "<pre>";
-    echo "Testing Enabled";
     //$this->itwGetProductsFromWooCommerce();
 	//$this->itwGetProductsFromIGDB();
-	$this->itwUpdateWcProducts();
-	die;
+	//$this->itwUpdateWcProducts();
+  }
+  
+  public function itwShowUpdatedWcProducts(){
+	  
+	wp_enqueue_style('igdbapirbbstyle');
+
+    $perpage = 30;
+    
+    if(isset($_GET['paged']) & !empty($_GET['paged'])){
+      $curpage = $_GET['paged'];
+    }else{
+      $curpage = 1;
+    }
+
+    $start = ($curpage * $perpage) - $perpage;
+	$table = 'itw_wc_posts';
+    $totalRows = $this->getRowCount($table,0);
+	$processedRows = $this->getRowCount($table,2);
+    $totalItems = $totalRows->count;
+	$processedItems = $processedRows->count;
+    $startpage = 1;
+    $endpage = ceil($processedItems/$perpage);
+    $nextpage = $curpage + 1;
+    $previouspage = $curpage - 1;
+    
+    $productResults = $this->getUpdatedResults($start,$perpage,$table);
+    include 'products-file.php';
+	  
+  }
+  
+  public function getRowCount($table,$processed){
+    global $wpdb;
+    $table = $wpdb->prefix.$table;
+	if($processed){
+		$query = "SELECT count(*) as count FROM $table where is_processed = $processed";
+	}else{
+		$query = "SELECT count(*) as count FROM $table";
+	}
+    
+    $results = $wpdb->get_row( $query, OBJECT );
+    return $results;
+  }
+  
+  public function getUpdatedResults($start,$limit,$table){
+    global $wpdb;
+    $table = $wpdb->prefix.$table;
+    $query = "SELECT * FROM $table WHERE id > 0 and is_processed = 2 ORDER BY updated DESC LIMIT $start,$limit";
+    $results = $wpdb->get_results( $query, OBJECT_K );
+	$results = array_column($results, 'object','post_id');
+    return $results;
   }
 
   public function itwGetProductsFromWooCommerce(){
@@ -144,15 +220,15 @@ class IgdbToWc {
 	foreach($getTitles as $key => $gameObj){
 	  $this->itwUpdateProductToWc($key,json_decode($gameObj));
 	}
-	die;
   }
   
   public function itwUpdateProductToWc($id,$gameObj){
+
 	$my_post = array(
 		'ID'           => $id,
 		'post_content' => $gameObj[0]->summary,
 	);
-
+	
 	// Update the post into the database
 	wp_update_post( $my_post );
 	
@@ -179,7 +255,8 @@ class IgdbToWc {
   }
 
   public function itwMainPage(){
-    $this->processForTesting();    
+    //$this->processForTesting();
+	$this->itwShowUpdatedWcProducts();
   }
 
   public function itwGetProductsFromWcTable($is_processed){
@@ -187,11 +264,11 @@ class IgdbToWc {
     global $wpdb;
     $table = $wpdb->prefix.$table;
 	if($is_processed == 0){
-		$sqlQuery = "SELECT post_id,post_title FROM $table WHERE id > 0 and is_processed = 0 ORDER BY id DESC limit 30";
+		$sqlQuery = "SELECT post_id,post_title FROM $table WHERE id > 0 and is_processed = 0 ORDER BY id DESC limit 15";
 		$results = $wpdb->get_results( $sqlQuery, OBJECT_K );
 		$results = array_column($results, 'post_title','post_id');
 	}else if($is_processed == 1){
-		$sqlQuery = "SELECT post_id,object FROM $table WHERE id > 0 and is_processed = 1 ORDER BY id DESC limit 30";
+		$sqlQuery = "SELECT post_id,object FROM $table WHERE id > 0 and is_processed = 1 ORDER BY id DESC limit 15";
 		$results = $wpdb->get_results( $sqlQuery, OBJECT_K );
 		$results = array_column($results, 'object','post_id');		
 	}
